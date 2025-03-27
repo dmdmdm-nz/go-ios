@@ -1,7 +1,7 @@
 on:
   push:
     branches:
-      - main
+      - dmdmdm-nz-patches
 
 name: Release-Go-iOS
 jobs:
@@ -138,24 +138,3 @@ jobs:
           files: "*.zip"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           release-tag: ${{ env.release_tag }}
-
-      - name: Publish NPM
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
-        run: |
-          mkdir ./npm_publish/dist
-          mkdir ./npm_publish/dist/go-ios-darwin-amd64_darwin_amd64
-          mkdir ./npm_publish/dist/go-ios-darwin-arm64_darwin_arm64
-          mkdir ./npm_publish/dist/go-ios-linux-amd64_linux_amd64
-          mkdir ./npm_publish/dist/go-ios-linux-arm64_linux_arm64
-          mkdir ./npm_publish/dist/go-ios-windows-amd64_windows_amd64
-          cp ./mac-bin/ios ./npm_publish/dist/go-ios-darwin-amd64_darwin_amd64/ios
-          cp ./mac-bin/ios ./npm_publish/dist/go-ios-darwin-arm64_darwin_arm64/ios
-          cp ./win-bin/ios.exe ./npm_publish/dist/go-ios-windows-amd64_windows_amd64/ios.exe
-          cp ./bin/ios-amd64 ./npm_publish/dist/go-ios-linux-amd64_linux_amd64/ios
-          cp ./bin/ios-arm64 ./npm_publish/dist/go-ios-linux-arm64_linux_arm64/ios
-          echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> ~/.npmrc
-          cd npm_publish
-          sed -i 's/\"local-build\"/\"${{ env.release_tag }}\"/' package.json
-          npm install
-          npm publish
