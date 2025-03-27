@@ -87,7 +87,7 @@ func CreateWdaSession(c *gin.Context) {
 			Env:                config.Env,
 			Args:               config.Args,
 			Device:             device,
-			Listener:           testmanagerd.NewTestListener(&session, &session, os.TempDir()),
+			Listener:           testmanagerd.NewTestListener(&session, &session, os.TempDir(), false),
 		})
 		if err != nil {
 			log.

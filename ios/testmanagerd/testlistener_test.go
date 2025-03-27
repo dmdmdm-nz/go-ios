@@ -15,7 +15,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Wait for test finish with single waiter", func(t *testing.T) {
-		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir())
+		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir(), false)
 
 		go func() {
 			testListener.didFinishExecutingTestPlan()
@@ -25,7 +25,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Wait for test finish with multiple waiters", func(t *testing.T) {
-		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir())
+		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir(), false)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -46,7 +46,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check error on a failed test run", func(t *testing.T) {
-		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir())
+		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir(), false)
 
 		testListener.initializationForUITestingDidFailWithError(nskeyedarchiver.NSError{
 			ErrorCode: 1, Domain: "testdomain", UserInfo: map[string]interface{}{}})
@@ -56,7 +56,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check error on a failed test run with bootstrap error", func(t *testing.T) {
-		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir())
+		testListener := NewTestListener(os.Stdout, os.Stdout, os.TempDir(), false)
 
 		testListener.didFailToBootstrapWithError(nskeyedarchiver.NSError{
 			ErrorCode: 1, Domain: "testdomain", UserInfo: map[string]interface{}{}})
@@ -69,7 +69,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 		logWriter := assertionWriter{}
 		debugLogWriter := assertionWriter{}
 
-		testListener := NewTestListener(&logWriter, &debugLogWriter, os.TempDir())
+		testListener := NewTestListener(&logWriter, &debugLogWriter, os.TempDir(), false)
 
 		testListener.LogMessage("log")
 		testListener.LogDebugMessage("debug")
@@ -79,7 +79,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test suite creation", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "2024-01-16 15:36:43 +0000")
 		testListener.testSuiteFinished("mysuite", "2024-01-16 15:36:44 +0000", 0, 0, 0, 0, 0, 0, 1.0, 1.0)
@@ -103,7 +103,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test case creation", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "2024-01-16 15:36:43 +0000")
 		testListener.testCaseDidStartForClass("mysuite", "mymethod")
@@ -116,7 +116,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test start invalid date", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "INVALIDDATE")
 		testListener.testSuiteFinished("mysuite", "INVALIDDATE", 0, 0, 0, 0, 0, 0, 1.0, 1.0)
@@ -126,7 +126,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test case failure", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "2024-01-16 15:36:43 +0000")
 		testListener.testCaseDidStartForClass("mysuite", "mymethod")
@@ -142,7 +142,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test case finish", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "2024-01-16 15:36:43 +0000")
 		testListener.testCaseDidStartForClass("mysuite", "mymethod")
@@ -154,7 +154,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test suite finish", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "2024-01-16 15:36:43 +0000")
 		testListener.testCaseDidStartForClass("mysuite", "mymethod1")
@@ -171,7 +171,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test case stall", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		testListener.testSuiteDidStart("mysuite", "2024-01-16 15:36:43 +0000")
 		testListener.testCaseDidStartForClass("mysuite", "mymethod1")
@@ -183,7 +183,7 @@ func TestFinishExecutingTestPlan(t *testing.T) {
 	})
 
 	t.Run("Check test case with attachments", func(t *testing.T) {
-		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir())
+		testListener := NewTestListener(io.Discard, io.Discard, os.TempDir(), false)
 
 		payload := []byte("test")
 		attachments := make([]nskeyedarchiver.XCTAttachment, 1)

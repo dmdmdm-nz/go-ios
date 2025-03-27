@@ -76,7 +76,7 @@ func TestXcuiTest(t *testing.T) {
 			Env:                wdaenv,
 			Args:               wdaargs,
 			Device:             device,
-			Listener:           testmanagerd.NewTestListener(os.Stdout, os.Stdout, os.TempDir()),
+			Listener:           testmanagerd.NewTestListener(os.Stdout, os.Stdout, os.TempDir(), false),
 		})
 		if err != nil {
 			log.WithFields(log.Fields{"error": err}).Fatal("Failed running WDA")

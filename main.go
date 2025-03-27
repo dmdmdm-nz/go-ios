@@ -123,9 +123,9 @@ Usage:
   ios resetax [options]
   ios resetlocation [options]
   ios rsd ls [options]
-  ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testrunnerbundleid>] [--xctest-config=<xctestconfig>] [--log-output=<file>] [--xctest] [--test-to-run=<tests>]... [--test-to-skip=<tests>]... [--env=<e>]... [options]
+  ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testrunnerbundleid>] [--xctest-config=<xctestconfig>] [--log-output=<file>] [--xctest] [--test-to-run=<tests>]... [--test-to-skip=<tests>]... [--env=<e>]... [--quiet] [options]
   ios runwda [--bundleid=<bundleid>] [--testrunnerbundleid=<testbundleid>] [--xctestconfig=<xctestconfig>] [--log-output=<file>] [--arg=<a>]... [--env=<e>]... [options]
-  ios runxctest [--xctestrun-file-path=<xctestrunFilePath>] [--log-output=<file>] [options]
+  ios runxctest [--xctestrun-file-path=<xctestrunFilePath>] [--log-output=<file>] [--quiet] [options]
   ios screenshot [options] [--output=<outfile>] [--stream] [--port=<port>]
   ios setlocation [options] [--lat=<lat>] [--lon=<lon>]
   ios setlocationgpx [options] [--gpxfilepath=<gpxfilepath>]
@@ -241,13 +241,13 @@ The commands work as following:
    ios resetax [options]                                              Reset accessibility settings to defaults.
    ios resetlocation [options]                                        Resets the location of the device to the actual one
    ios rsd ls [options]											  List RSD services and their port.
-   ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testbundleid>] [--xctest-config=<xctestconfig>] [--log-output=<file>] [--xctest] [--test-to-run=<tests>]... [--test-to-skip=<tests>]... [--env=<e>]... [options]                    Run a XCUITest. If you provide only bundle-id go-ios will try to dynamically create test-runner-bundle-id and xctest-config.
+   ios runtest [--bundle-id=<bundleid>] [--test-runner-bundle-id=<testbundleid>] [--xctest-config=<xctestconfig>] [--log-output=<file>] [--xctest] [--test-to-run=<tests>]... [--test-to-skip=<tests>]... [--env=<e>]... [--quiet] [options]                    Run a XCUITest. If you provide only bundle-id go-ios will try to dynamically create test-runner-bundle-id and xctest-config.
    >                                                                  If you provide '-' as log output, it prints resuts to stdout.
    >                                                                  To be able to filter for tests to run or skip, use one argument per test selector. Example: runtest --test-to-run=(TestTarget.)TestClass/testMethod --test-to-run=(TestTarget.)TestClass/testMethod (the value for 'TestTarget' is optional)
    >                                                                  The method name can also be omitted and in this case all tests of the specified class are run
    ios runwda [--bundleid=<bundleid>] [--testrunnerbundleid=<testbundleid>] [--xctestconfig=<xctestconfig>] [--log-output=<file>] [--arg=<a>]... [--env=<e>]...[options]  runs WebDriverAgents
    >                                                                  specify runtime args and env vars like --env ENV_1=something --env ENV_2=else  and --arg ARG1 --arg ARG2
-   ios runxctest [--xctestrun-file-path=<xctestrunFilePath>]  [--log-output=<file>] [options]                    Run a XCTest. The --xctestrun-file-path specifies the path to the .xctestrun file to configure the test execution.
+   ios runxctest [--xctestrun-file-path=<xctestrunFilePath>]  [--log-output=<file>] [--quiet] [options]                    Run a XCTest. The --xctestrun-file-path specifies the path to the .xctestrun file to configure the test execution.
    >                                                                  If you provide '-' as log output, it prints resuts to stdout.
    ios screenshot [options] [--output=<outfile>] [--stream] [--port=<port>]  Takes a screenshot and writes it to the current dir or to <outfile>  If --stream is supplied it
    >                                                                  starts an mjpeg server at 0.0.0.0:3333. Use --port to set another port.
@@ -969,6 +969,8 @@ The commands work as following:
 		env := splitKeyValuePairs(arguments["--env"].([]string), "=")
 		isXCTest, _ := arguments.Bool("--xctest")
 
+		quiet, _ := arguments.Bool("--quiet")
+
 		config := testmanagerd.TestConfig{
 			BundleId:           bundleID,
 			TestRunnerBundleId: testRunnerBundleId,
@@ -989,7 +991,7 @@ The commands work as following:
 			}
 			defer writer.Close()
 
-			config.Listener = testmanagerd.NewTestListener(writer, writer, os.TempDir())
+			config.Listener = testmanagerd.NewTestListener(writer, writer, os.TempDir(), quiet)
 
 			testResults, err := testmanagerd.RunTestWithConfig(context.TODO(), config)
 			if err != nil {
@@ -998,7 +1000,7 @@ The commands work as following:
 
 			fmt.Println(convertToJSONString(testResults))
 		} else {
-			config.Listener = testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir())
+			config.Listener = testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir(), quiet)
 			testResults, err := testmanagerd.RunTestWithConfig(context.TODO(), config)
 			if err != nil {
 				log.WithFields(log.Fields{"error": err}).Info("Failed running Xcuitest")
@@ -1015,6 +1017,8 @@ The commands work as following:
 
 		rawTestlog, rawTestlogErr := arguments.String("--log-output")
 
+		quiet, _ := arguments.Bool("--quiet")
+
 		if rawTestlogErr == nil {
 			var writer *os.File = os.Stdout
 			if rawTestlog != "-" {
@@ -1023,7 +1027,7 @@ The commands work as following:
 				writer = file
 			}
 			defer writer.Close()
-			var listener = testmanagerd.NewTestListener(writer, writer, os.TempDir())
+			var listener = testmanagerd.NewTestListener(writer, writer, os.TempDir(), quiet)
 
 			testResults, err := testmanagerd.StartXCTestWithConfig(context.TODO(), xctestrunFilePath, device, listener)
 			if err != nil {
@@ -1032,7 +1036,7 @@ The commands work as following:
 
 			fmt.Println(convertToJSONString(testResults))
 		} else {
-			var listener = testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir())
+			var listener = testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir(), quiet)
 			testResults, err := testmanagerd.StartXCTestWithConfig(context.TODO(), xctestrunFilePath, device, listener)
 			if err != nil {
 				log.WithFields(log.Fields{"error": err}).Info("Failed running Xctest")
@@ -1386,7 +1390,7 @@ func runWdaCommand(device ios.DeviceEntry, arguments docopt.Opts) bool {
 				Env:                wdaenv,
 				Args:               wdaargs,
 				Device:             device,
-				Listener:           testmanagerd.NewTestListener(writer, writer, os.TempDir()),
+				Listener:           testmanagerd.NewTestListener(writer, writer, os.TempDir(), false),
 			})
 			if err != nil {
 				errorChannel <- err

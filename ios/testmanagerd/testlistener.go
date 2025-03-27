@@ -25,6 +25,7 @@ type TestListener struct {
 	attachmentsDirectory string
 	TestSuites           []TestSuite
 	runningTestSuite     *TestSuite
+	quiet                bool
 }
 
 type TestSuite struct {
@@ -72,13 +73,14 @@ type TestAttachment struct {
 	UniformTypeIdentifier string
 }
 
-func NewTestListener(logWriter io.Writer, debugLogWriter io.Writer, attachmentsDirectory string) *TestListener {
+func NewTestListener(logWriter io.Writer, debugLogWriter io.Writer, attachmentsDirectory string, quiet bool) *TestListener {
 	return &TestListener{
 		finished:             make(chan struct{}),
 		logWriter:            logWriter,
 		debugLogWriter:       debugLogWriter,
 		TestSuites:           make([]TestSuite, 0),
 		attachmentsDirectory: attachmentsDirectory,
+		quiet:                quiet,
 	}
 }
 
@@ -243,7 +245,9 @@ func (t *TestListener) testSuiteFinished(suiteName string, date string, testCoun
 }
 
 func (t *TestListener) LogMessage(msg string) {
-	t.logWriter.Write([]byte(msg))
+	if !t.quiet {
+		t.logWriter.Write([]byte(msg))
+	}
 }
 
 func (t *TestListener) LogDebugMessage(msg string) {
