@@ -225,6 +225,7 @@ type TunnelManager struct {
 	userspaceTUN         bool
 	closeOnce            sync.Once
 	portOffset           int
+	rs                   remotedService
 }
 
 // NewTunnelManager creates a new TunnelManager instance for setting up device tunnels for all connected devices
@@ -238,6 +239,7 @@ func NewTunnelManager(pm PairRecordManager, userspaceTUN bool) *TunnelManager {
 		startTunnelTimeout: 10 * time.Second,
 		userspaceTUN:       userspaceTUN,
 		portOffset:         1,
+		rs:                 NewRemotedService(),
 	}
 }
 
@@ -289,7 +291,7 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 			d.UserspaceTUNPort = ios.HttpApiPort() + m.portOffset
 			m.portOffset++
 		}
-		t, err := m.startTunnel(ctx, d)
+		t, err := m.startTunnel(ctx, d, m.rs)
 		if err != nil {
 			log.WithField("udid", udid).
 				WithError(err).
@@ -335,7 +337,7 @@ func (m *TunnelManager) stopTunnel(t Tunnel) error {
 	return t.Close()
 }
 
-func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry) (Tunnel, error) {
+func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry, rs remotedService) (Tunnel, error) {
 	log.WithField("udid", device.Properties.SerialNumber).Info("start tunnel")
 	startTunnelCtx, cancel := context.WithTimeout(ctx, m.startTunnelTimeout)
 	defer cancel()
@@ -343,7 +345,7 @@ func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry)
 	if err != nil {
 		return Tunnel{}, fmt.Errorf("startTunnel: failed to get device version: %w", err)
 	}
-	t, err := m.ts.StartTunnel(startTunnelCtx, device, m.pm, version, m.userspaceTUN)
+	t, err := m.ts.StartTunnel(startTunnelCtx, device, m.pm, version, m.userspaceTUN, m.rs)
 	if err != nil {
 		return Tunnel{}, err
 	}
@@ -373,7 +375,7 @@ func (m *TunnelManager) FindTunnel(udid string) (Tunnel, error) {
 }
 
 type tunnelStarter interface {
-	StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool) (Tunnel, error)
+	StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService) (Tunnel, error)
 }
 
 type deviceLister interface {
@@ -383,7 +385,7 @@ type deviceLister interface {
 type manualPairingTunnelStart struct {
 }
 
-func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool) (Tunnel, error) {
+func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService) (Tunnel, error) {
 
 	if version.GreaterThan(semver.MustParse("17.4.0")) {
 		if userspaceTUN {
@@ -398,6 +400,13 @@ func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.De
 		if userspaceTUN {
 			return Tunnel{}, errors.New("manualPairingTunnelStart: userspaceTUN not supported for iOS >=17 and < 17.4")
 		}
+
+		resume_remoted, err := rs.suspendRemoted()
+		if err != nil {
+			return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: failed to suspend remoted: %w", err)
+		}
+
+		defer resume_remoted()
 		return ManualPairAndConnectToTunnel(ctx, device, p)
 	}
 	return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: unsupported iOS version %s", version.String())
