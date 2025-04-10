@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime"
+	"strings"
 
 	"github.com/grandcat/zeroconf"
 	log "github.com/sirupsen/logrus"
@@ -26,6 +28,50 @@ func FindDeviceInterfaceAddress(ctx context.Context, device DeviceEntry) (string
 	defer cancel()
 
 	for _, iface := range ifaces {
+
+		// Skip interfaces that do not start with 'en' on macOS or 'enx' on Linux
+		if runtime.GOOS == "darwin" && !strings.HasPrefix(iface.Name, "en") {
+			log.WithField("interface", iface.Name).
+				Trace("skipping interface because it does not start with 'en'")
+			continue
+		} else if runtime.GOOS == "linux" && !strings.HasPrefix(iface.Name, "enx") {
+			log.WithField("interface", iface.Name).
+				Trace("skipping interface because it does not start with 'enx'")
+			continue
+		}
+
+		// Skip interfaces that are not up
+		if iface.Flags&net.FlagUp == 0 {
+			log.WithField("interface", iface.Name).
+				Debug("skipping interface because it is not up")
+			continue
+		}
+
+		// Skip interfaces that do not have an IPv6 address
+		addrs, err := iface.Addrs()
+		if err != nil {
+			log.WithField("interface", iface.Name).
+				WithField("err", err).
+				Debug("failed to get interface addresses")
+			continue
+		}
+
+		hasIPv6 := false
+		for _, addr := range addrs {
+			if _, ok := addr.(*net.IPNet); ok && addr.(*net.IPNet).IP.To16() != nil && addr.(*net.IPNet).IP.To4() == nil {
+				hasIPv6 = true
+				break
+			}
+		}
+
+		if !hasIPv6 {
+			log.WithField("interface", iface.Name).Debug("skipping interface without IPv6 address")
+			continue
+		}
+
+		log.WithField("interface", iface.Name).
+			WithField("udid", device.Properties.SerialNumber).
+			Info("Looking for device")
 		resolver, err := zeroconf.NewResolver(zeroconf.SelectIfaces([]net.Interface{iface}), zeroconf.SelectIPTraffic(zeroconf.IPv6))
 		if err != nil {
 			log.WithField("interface", iface.Name).
@@ -58,7 +104,6 @@ func checkEntry(ctx context.Context, device DeviceEntry, interfaceName string, e
 			if entry == nil {
 				continue
 			}
-			print(entry.ServiceInstanceName())
 			for _, ip6 := range entry.AddrIPv6 {
 				tryHandshake(ctx, ip6, entry.Port, interfaceName, device, result)
 			}

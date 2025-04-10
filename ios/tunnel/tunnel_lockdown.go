@@ -43,6 +43,7 @@ func connectToTunnelLockdown(ctx context.Context, device ios.DeviceEntry, connTo
 		err := forwardTCPToInterface(tunnelCtx, tunnelInfo.ClientParameters.Mtu, connToDevice, utunIface)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to tunnel interface")
+			cancel()
 		}
 	}()
 
@@ -50,6 +51,7 @@ func connectToTunnelLockdown(ctx context.Context, device ios.DeviceEntry, connTo
 		err := forwardTUNToDevice(tunnelCtx, tunnelInfo.ClientParameters.Mtu, utunIface, connToDevice)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to the device")
+			cancel()
 		}
 	}()
 
