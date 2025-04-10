@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/danielpaulus/go-ios/ios"
@@ -47,9 +48,13 @@ func (t Tunnel) Close() error {
 
 // ManualPairAndConnectToTunnel tries to verify an existing pairing, and if this fails it triggers a new manual pairing process.
 // After a successful pairing a tunnel for this device gets started and the tunnel information is returned
-func ManualPairAndConnectToTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager) (Tunnel, error) {
+func ManualPairAndConnectToTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, zcMux *sync.Mutex) (Tunnel, error) {
 	log.Info("ManualPairAndConnectToTunnel: starting manual pairing and tunnel connection")
+	// Concurrent zeroconf service discoveries can lead to no devices being detected,
+	// avoid concurrent service discovery to avoid this.
+	zcMux.Lock()
 	addr, err := ios.FindDeviceInterfaceAddress(ctx, device)
+	zcMux.Unlock()
 	if err != nil {
 		return Tunnel{}, fmt.Errorf("ManualPairAndConnectToTunnel: failed to find device ethernet interface: %w", err)
 	}

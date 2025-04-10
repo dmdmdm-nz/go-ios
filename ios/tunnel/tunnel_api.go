@@ -218,6 +218,7 @@ type TunnelManager struct {
 	dl                   deviceLister
 	pm                   PairRecordManager
 	mux                  sync.Mutex
+	zcMux                sync.Mutex
 	tunnels              map[string]Tunnel
 	startTunnelTimeout   time.Duration
 	firstUpdateCompleted bool
@@ -309,8 +310,26 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 			}
 			m.mux.Unlock()
 
+			// Get the device version.
+			version, err := ios.GetProductVersion(dev)
+			if err != nil {
+				log.
+					WithField("udid", dev.Properties.SerialNumber).
+					WithError(err).
+					Error("startTunnel: failed to get device version")
+				return
+			}
+
+			// Skip tunnel creation for unsupported iOS versions.
+			if version.LessThan(semver.MustParse("17.0.0")) {
+				log.
+					WithField("udid", dev.Properties.SerialNumber).
+					Tracef("skipping: unsupported iOS version %s", version.String())
+				return
+			}
+
 			// Start the tunnel.
-			t, err := m.startTunnel(ctx, dev)
+			t, err := m.startTunnel(ctx, dev, version)
 			if err != nil {
 				log.WithField("udid", dev.Properties.SerialNumber).
 					WithError(err).
@@ -388,15 +407,13 @@ func (m *TunnelManager) stopTunnel(t Tunnel) error {
 	return t.Close()
 }
 
-func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry) (Tunnel, error) {
+func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry, version *semver.Version) (Tunnel, error) {
 	log.WithField("udid", device.Properties.SerialNumber).Info("start tunnel")
+
 	startTunnelCtx, cancel := context.WithTimeout(ctx, m.startTunnelTimeout)
 	defer cancel()
-	version, err := ios.GetProductVersion(device)
-	if err != nil {
-		return Tunnel{}, fmt.Errorf("startTunnel: failed to get device version: %w", err)
-	}
-	t, err := m.ts.StartTunnel(startTunnelCtx, device, m.pm, version, m.userspaceTUN, m.rs)
+
+	t, err := m.ts.StartTunnel(startTunnelCtx, device, m.pm, version, m.userspaceTUN, m.rs, &m.zcMux)
 	if err != nil {
 		return Tunnel{}, err
 	}
@@ -426,7 +443,7 @@ func (m *TunnelManager) FindTunnel(udid string) (Tunnel, error) {
 }
 
 type tunnelStarter interface {
-	StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService) (Tunnel, error)
+	StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService, zcMux *sync.Mutex) (Tunnel, error)
 }
 
 type deviceLister interface {
@@ -436,7 +453,7 @@ type deviceLister interface {
 type manualPairingTunnelStart struct {
 }
 
-func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService) (Tunnel, error) {
+func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService, zcMux *sync.Mutex) (Tunnel, error) {
 
 	if version.GreaterThan(semver.MustParse("17.4.0")) {
 		if userspaceTUN {
@@ -447,9 +464,7 @@ func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.De
 		}
 
 		return ConnectTunnelLockdown(device)
-	}
-
-	if version.Major() >= 17 {
+	} else {
 		if userspaceTUN {
 			return Tunnel{}, errors.New("manualPairingTunnelStart: userspaceTUN not supported for iOS >=17 and < 17.4")
 		}
@@ -460,10 +475,8 @@ func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.De
 		}
 
 		defer resume_remoted()
-		return ManualPairAndConnectToTunnel(ctx, device, p)
+		return ManualPairAndConnectToTunnel(ctx, device, p, zcMux)
 	}
-
-	return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: unsupported iOS version %s", version.String())
 }
 
 type deviceList struct {
