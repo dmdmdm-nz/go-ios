@@ -218,7 +218,6 @@ type TunnelManager struct {
 	dl                   deviceLister
 	pm                   PairRecordManager
 	mux                  sync.Mutex
-	zcMux                sync.Mutex
 	tunnels              map[string]Tunnel
 	startTunnelTimeout   time.Duration
 	firstUpdateCompleted bool
@@ -272,7 +271,6 @@ func (m *TunnelManager) FirstUpdateCompleted() bool {
 // UpdateTunnels checks for connected devices and starts a new tunnel if needed
 // On device disconnects the tunnel resources get cleaned up
 func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
-	// Copy the current tunnels map under a lock to avoid concurrent map access.
 	m.mux.Lock()
 	localTunnels := make(map[string]Tunnel, len(m.tunnels))
 	for key, tunnel := range m.tunnels {
@@ -286,98 +284,64 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 		return fmt.Errorf("UpdateTunnels: failed to get list of devices: %w", err)
 	}
 
-	// WaitGroup for starting tunnels concurrently.
-	var wg sync.WaitGroup
+	usbmuxDevices := []ios.DeviceEntry{}
+	usbncmDevices := []ios.DeviceEntry{}
 
-	// First loop: For all devices without tunnels, start tunnels concurrently.
 	for _, d := range devices.DeviceList {
+		// If this is a network device, ignore it (we don't track network vs. usb devices).
+		if d.Properties.ConnectionType != "USB" {
+			continue
+		}
+
 		udid := d.Properties.SerialNumber
 		// If a tunnel already exists for this device, skip it.
 		if _, exists := localTunnels[udid]; exists {
 			continue
 		}
 
-		wg.Add(1)
-		// Capture the device variable to avoid issues with concurrent loop iteration.
-		go func(dev ios.DeviceEntry) {
-			defer wg.Done()
+		// Get the device version.
+		version, err := ios.GetProductVersion(d)
+		if err != nil {
+			log.
+				WithField("udid", udid).
+				WithError(err).
+				Error("startTunnel: failed to get device version")
+			continue
+		}
 
-			// If using userspace tunnel and the device port is unassigned, assign it.
-			m.mux.Lock()
-			if m.userspaceTUN && dev.UserspaceTUNPort == 0 {
-				dev.UserspaceTUNPort = ios.HttpApiPort() + m.portOffset
-				m.portOffset++
-			}
-			m.mux.Unlock()
-
-			// Get the device version.
-			version, err := ios.GetProductVersion(dev)
-			if err != nil {
-				log.
-					WithField("udid", dev.Properties.SerialNumber).
-					WithError(err).
-					Error("startTunnel: failed to get device version")
-				return
-			}
-
-			// Skip tunnel creation for unsupported iOS versions.
-			if version.LessThan(semver.MustParse("17.0.0")) {
-				log.
-					WithField("udid", dev.Properties.SerialNumber).
-					Tracef("skipping: unsupported iOS version %s", version.String())
-				return
-			}
-
-			// Start the tunnel.
-			t, err := m.startTunnel(ctx, dev, version)
-			if err != nil {
-				log.WithField("udid", dev.Properties.SerialNumber).
-					WithError(err).
-					Warn("failed to start tunnel")
-				return
-			}
-
-			// Safely update the maps with the new tunnel.
-			m.mux.Lock()
-			localTunnels[dev.Properties.SerialNumber] = t
-			m.tunnels[dev.Properties.SerialNumber] = t
-			m.mux.Unlock()
-		}(d)
+		if version.LessThan(semver.MustParse("17.0.0")) {
+			log.
+				WithField("udid", udid).
+				Tracef("skipping: unsupported iOS version %s", version.String())
+			continue
+		} else if version.LessThan(semver.MustParse("17.4.0")) {
+			usbncmDevices = append(usbncmDevices, d)
+		} else {
+			usbmuxDevices = append(usbmuxDevices, d)
+		}
 	}
 
-	// Wait for all tunnel start operations to finish.
+	var wg sync.WaitGroup
+
+	// Create tunnels for USBMUX devices in parallel.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.createUsbmuxTunnels(ctx, localTunnels, usbmuxDevices)
+	}()
+
+	// Create tunnels for USB NCM devices in parallel.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.createUsbNcmTunnels(ctx, localTunnels, usbncmDevices)
+	}()
+
+	// Wait for both operations to complete.
 	wg.Wait()
 
-	// WaitGroup for stopping tunnels concurrently.
-	var wg2 sync.WaitGroup
-
-	// Second loop: For tunnels corresponding to devices that are no longer present, stop them concurrently.
-	for udid, tun := range localTunnels {
-		exists := false
-		for _, d := range devices.DeviceList {
-			if d.Properties.SerialNumber == udid {
-				exists = true
-				break
-			}
-		}
-		if !exists {
-			wg2.Add(1)
-			go func(u string, tunnel Tunnel) {
-				defer wg2.Done()
-
-				// Attempt to stop the tunnel.
-				_ = m.stopTunnel(tunnel)
-
-				// Remove the tunnel from the map.
-				m.mux.Lock()
-				delete(m.tunnels, u)
-				m.mux.Unlock()
-			}(udid, tun)
-		}
-	}
-
-	// Wait for all tunnel stop operations to finish.
-	wg2.Wait()
+	// Remove tunnels for devices that are no longer present.
+	m.removeDisconnectedTunnels(ctx, localTunnels, devices)
 
 	// Mark the update as completed.
 	m.mux.Lock()
@@ -385,6 +349,122 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 	m.mux.Unlock()
 
 	return nil
+}
+
+func (m *TunnelManager) createUsbmuxTunnels(ctx context.Context, localTunnels map[string]Tunnel, devices []ios.DeviceEntry) {
+	var wg sync.WaitGroup
+	for _, device := range devices {
+		wg.Add(1)
+		go func(device ios.DeviceEntry) {
+			defer wg.Done()
+
+			// If using userspace tunnel and the device port is unassigned, assign it.
+			m.mux.Lock()
+			if m.userspaceTUN && device.UserspaceTUNPort == 0 {
+				device.UserspaceTUNPort = ios.HttpApiPort() + m.portOffset
+				m.portOffset++
+			}
+			m.mux.Unlock()
+
+			// Start the tunnel.
+			t, err := m.startUsbmuxTunnel(ctx, device)
+			if err != nil {
+				log.WithField("udid", device.Properties.SerialNumber).
+					WithError(err).
+					Warn("failed to start tunnel")
+				return
+			}
+
+			// Safely update the maps with the new tunnel.
+			m.mux.Lock()
+			localTunnels[device.Properties.SerialNumber] = t
+			m.tunnels[device.Properties.SerialNumber] = t
+			m.mux.Unlock()
+		}(device)
+	}
+	wg.Wait()
+}
+
+func (m *TunnelManager) createUsbNcmTunnels(ctx context.Context, localTunnels map[string]Tunnel, devices []ios.DeviceEntry) {
+	if len(devices) == 0 {
+		return
+	}
+
+	// Find RSD service address.
+	log.Info("looking for remoted services...")
+	addrs, err := ios.FindRemotedServiceAddresses(ctx)
+	if err != nil {
+		log.WithError(err).Error("failed to find remoted services")
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, addr := range addrs {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+
+			udid, err := ios.TryGetRsdUdid(ctx, addr)
+			if err != nil {
+				log.WithError(err).
+					WithField("addr", addr).
+					Error("failed to get UDID from address")
+				return
+			}
+
+			// Check if the UDID exists in the devices list.
+			var device ios.DeviceEntry
+			found := false
+			for _, d := range devices {
+				if d.Properties.SerialNumber == udid {
+					found = true
+					device = d
+					break
+				}
+			}
+			if !found {
+				return
+			}
+
+			// Start the tunnel.
+			t, err := m.startUsbNcmTunnel(ctx, device, addr)
+			if err != nil {
+				log.WithError(err).
+					WithField("udid", device.Properties.SerialNumber).
+					Warn("failed to start tunnel")
+				return
+			}
+
+			// Safely update the maps with the new tunnel.
+			m.mux.Lock()
+			localTunnels[device.Properties.SerialNumber] = t
+			m.tunnels[device.Properties.SerialNumber] = t
+			m.mux.Unlock()
+		}(addr)
+	}
+	wg.Wait()
+}
+
+func (m *TunnelManager) removeDisconnectedTunnels(ctx context.Context, localTunnels map[string]Tunnel, devices ios.DeviceList) {
+	for udid, tunnel := range localTunnels {
+		exists := false
+		for _, d := range devices.DeviceList {
+			if d.Properties.SerialNumber == udid && d.Properties.ConnectionType == "USB" {
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			// Attempt to stop the tunnel.
+			_ = m.stopTunnel(tunnel)
+
+			// Remove the tunnel from the map.
+			m.mux.Lock()
+			delete(m.tunnels, udid)
+			m.mux.Unlock()
+		}
+	}
 }
 
 func (m *TunnelManager) RemoveTunnel(ctx context.Context, serialNumber string) error {
@@ -407,13 +487,26 @@ func (m *TunnelManager) stopTunnel(t Tunnel) error {
 	return t.Close()
 }
 
-func (m *TunnelManager) startTunnel(ctx context.Context, device ios.DeviceEntry, version *semver.Version) (Tunnel, error) {
+func (m *TunnelManager) startUsbmuxTunnel(ctx context.Context, device ios.DeviceEntry) (Tunnel, error) {
 	log.WithField("udid", device.Properties.SerialNumber).Info("start tunnel")
 
 	startTunnelCtx, cancel := context.WithTimeout(ctx, m.startTunnelTimeout)
 	defer cancel()
 
-	t, err := m.ts.StartTunnel(startTunnelCtx, device, m.pm, version, m.userspaceTUN, m.rs, &m.zcMux)
+	t, err := m.ts.StartUsbmuxTunnel(startTunnelCtx, device, m.userspaceTUN)
+	if err != nil {
+		return Tunnel{}, err
+	}
+	return t, nil
+}
+
+func (m *TunnelManager) startUsbNcmTunnel(ctx context.Context, device ios.DeviceEntry, addr string) (Tunnel, error) {
+	log.WithField("udid", device.Properties.SerialNumber).Info("start tunnel")
+
+	startTunnelCtx, cancel := context.WithTimeout(ctx, m.startTunnelTimeout)
+	defer cancel()
+
+	t, err := m.ts.StartUsbNcmTunnel(startTunnelCtx, device, m.pm, addr, m.rs)
 	if err != nil {
 		return Tunnel{}, err
 	}
@@ -443,7 +536,8 @@ func (m *TunnelManager) FindTunnel(udid string) (Tunnel, error) {
 }
 
 type tunnelStarter interface {
-	StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService, zcMux *sync.Mutex) (Tunnel, error)
+	StartUsbmuxTunnel(ctx context.Context, device ios.DeviceEntry, userspaceTUN bool) (Tunnel, error)
+	StartUsbNcmTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, addr string, rs remotedService) (Tunnel, error)
 }
 
 type deviceLister interface {
@@ -453,30 +547,26 @@ type deviceLister interface {
 type manualPairingTunnelStart struct {
 }
 
-func (m manualPairingTunnelStart) StartTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, version *semver.Version, userspaceTUN bool, rs remotedService, zcMux *sync.Mutex) (Tunnel, error) {
+func (m manualPairingTunnelStart) StartUsbmuxTunnel(ctx context.Context, device ios.DeviceEntry, userspaceTUN bool) (Tunnel, error) {
 
-	if version.GreaterThan(semver.MustParse("17.4.0")) {
-		if userspaceTUN {
-			tun, err := ConnectUserSpaceTunnelLockdown(device, device.UserspaceTUNPort)
-			tun.UserspaceTUN = true
-			tun.UserspaceTUNPort = device.UserspaceTUNPort
-			return tun, err
-		}
-
-		return ConnectTunnelLockdown(device)
-	} else {
-		if userspaceTUN {
-			return Tunnel{}, errors.New("manualPairingTunnelStart: userspaceTUN not supported for iOS >=17 and < 17.4")
-		}
-
-		resume_remoted, err := rs.suspendRemoted()
-		if err != nil {
-			return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: failed to suspend remoted: %w", err)
-		}
-
-		defer resume_remoted()
-		return ManualPairAndConnectToTunnel(ctx, device, p, zcMux)
+	if userspaceTUN {
+		tun, err := ConnectUserSpaceTunnelLockdown(device, device.UserspaceTUNPort)
+		tun.UserspaceTUN = true
+		tun.UserspaceTUNPort = device.UserspaceTUNPort
+		return tun, err
 	}
+
+	return ConnectTunnelLockdown(device)
+}
+
+func (m manualPairingTunnelStart) StartUsbNcmTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, addr string, rs remotedService) (Tunnel, error) {
+	resume_remoted, err := rs.suspendRemoted()
+	if err != nil {
+		return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: failed to suspend remoted: %w", err)
+	}
+
+	defer resume_remoted()
+	return ManualPairAndConnectToTunnel(ctx, device, p, addr)
 }
 
 type deviceList struct {

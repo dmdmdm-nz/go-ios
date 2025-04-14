@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/rsa"
@@ -52,7 +53,7 @@ func (t *tunnelService) Close() error {
 // when this operation is triggered
 // If there is already an active pairing with the credentials stored in PairRecordManager this call does not trigger
 // anything on the device and returns with an error
-func (t *tunnelService) ManualPair() error {
+func (t *tunnelService) ManualPair(ctx context.Context) error {
 	err := t.controlChannel.writeRequest(map[string]interface{}{
 		"handshake": map[string]interface{}{
 			"_0": map[string]interface{}{
@@ -84,7 +85,7 @@ func (t *tunnelService) ManualPair() error {
 		return fmt.Errorf("ManualPair: failed to initiate manual pairing: %w", err)
 	}
 
-	sessionKey, err := t.setupSessionKey()
+    sessionKey, err := t.setupSessionKey(ctx)
 	if err != nil {
 		return fmt.Errorf("ManualPair: failed to setup SRP session key: %w", err)
 	}
@@ -214,12 +215,25 @@ func (t *tunnelService) setupManualPairing() error {
 	return err
 }
 
-func (t *tunnelService) readDeviceKey() (publicKey []byte, salt []byte, err error) {
+func (t *tunnelService) readDeviceKey(ctx context.Context) (publicKey []byte, salt []byte, err error) {
 	var pairingData pairingData
-	err = t.controlChannel.readEvent(&pairingData)
-	if err != nil {
+	done := make(chan error, 1)
+
+	go func() {
+		done <- t.controlChannel.readEvent(&pairingData)
+	}()
+
+	log.Info("ManualPair: Displaying trust prompt on device")
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
 		return
+	case err = <-done:
+		if err != nil {
+			return
+		}
 	}
+
 	publicKey, err = tlvReader(pairingData.data).readCoalesced(typePublicKey)
 	if err != nil {
 		return
@@ -378,8 +392,8 @@ type tunnelParameters struct {
 	}
 }
 
-func (t *tunnelService) setupSessionKey() ([]byte, error) {
-	devicePublicKey, deviceSalt, err := t.readDeviceKey()
+func (t *tunnelService) setupSessionKey(ctx context.Context) ([]byte, error) {
+    devicePublicKey, deviceSalt, err := t.readDeviceKey(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("setupSessionKey: failed to read device public key and salt value: %w", err)
 	}
