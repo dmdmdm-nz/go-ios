@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"os/exec"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/danielpaulus/go-ios/ios"
@@ -29,15 +28,11 @@ import (
 
 // Tunnel describes the parameters of an established tunnel to the device
 type Tunnel struct {
-	// Address is the IPv6 address of the device over the tunnel
-	Address string `json:"address"`
-	// RsdPort is the port on which remote service discover is reachable
-	RsdPort int `json:"rsdPort"`
-	// Udid is the id of the device for this tunnel
-	Udid string `json:"udid"`
-	// Userspace TUN device is used, connect to the local tcp port at Default
-	UserspaceTUN     bool `json:"userspaceTun"`
-	UserspaceTUNPort int  `json:"userspaceTunPort"`
+	Address          string `json:"address"`      // Address is the IPv6 address of the device over the tunnel
+	RsdPort          int    `json:"rsdPort"`      // RsdPort is the port on which remote service discover is reachable
+	Udid             string `json:"udid"`         // Udid is the id of the device for this tunnel
+	UserspaceTUN     bool   `json:"userspaceTun"` // Userspace TUN device is used, connect to the local tcp port at Default
+	UserspaceTUNPort int    `json:"userspaceTunPort"`
 	closer           func() error
 }
 
@@ -48,16 +43,8 @@ func (t Tunnel) Close() error {
 
 // ManualPairAndConnectToTunnel tries to verify an existing pairing, and if this fails it triggers a new manual pairing process.
 // After a successful pairing a tunnel for this device gets started and the tunnel information is returned
-func ManualPairAndConnectToTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, zcMux *sync.Mutex) (Tunnel, error) {
+func ManualPairAndConnectToTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, addr string) (Tunnel, error) {
 	log.Info("ManualPairAndConnectToTunnel: starting manual pairing and tunnel connection")
-	// Concurrent zeroconf service discoveries can lead to no devices being detected,
-	// avoid concurrent service discovery to avoid this.
-	zcMux.Lock()
-	addr, err := ios.FindDeviceInterfaceAddress(ctx, device)
-	zcMux.Unlock()
-	if err != nil {
-		return Tunnel{}, fmt.Errorf("ManualPairAndConnectToTunnel: failed to find device ethernet interface: %w", err)
-	}
 
 	port, err := getUntrustedTunnelServicePort(addr, device)
 	if err != nil {
@@ -78,7 +65,7 @@ func ManualPairAndConnectToTunnel(ctx context.Context, device ios.DeviceEntry, p
 	}
 	ts := newTunnelServiceWithXpc(xpcConn, h, p)
 
-	err = ts.ManualPair()
+	err = ts.ManualPair(ctx)
 	if err != nil {
 		return Tunnel{}, fmt.Errorf("ManualPairAndConnectToTunnel: failed to pair device: %w", err)
 	}
