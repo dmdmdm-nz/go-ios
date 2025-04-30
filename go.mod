@@ -1,12 +1,12 @@
 module github.com/danielpaulus/go-ios
 
-go 1.22.0
+go 1.23.0
 
-toolchain go1.22.5
+toolchain go1.24.2
 
 require (
 	github.com/Masterminds/semver v1.5.0
-	github.com/dmdmdm-nz/zeroconf v0.0.0-20250413211336-a02da82d62f3
+	github.com/dmdmdm-nz/zeroconf v0.0.0-20250429004039-b38544f986ca
 	github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.1.2
@@ -19,10 +19,10 @@ require (
 	github.com/stretchr/testify v1.7.0
 	github.com/tadglines/go-pkgs v0.0.0-20210623144937-b983b20f54f9
 	go.mozilla.org/pkcs7 v0.0.0-20210826202110-33d05740a352
-	golang.org/x/crypto v0.32.0
+	golang.org/x/crypto v0.37.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
-	golang.org/x/net v0.34.0
-	golang.org/x/sys v0.29.0
+	golang.org/x/net v0.39.0
+	golang.org/x/sys v0.32.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	gvisor.dev/gvisor v0.0.0-20240405191320-0878b34101b5
 	howett.net/plist v0.0.0-20200419221736-3b63eb3a43b5
@@ -37,16 +37,16 @@ require (
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/pprof v0.0.0-20210407192527-94a9f03dee38 // indirect
-	github.com/miekg/dns v1.1.62 // indirect
+	github.com/miekg/dns v1.1.65 // indirect
 	github.com/onsi/ginkgo/v2 v2.9.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qtls-go1-20 v0.4.1 // indirect
 	github.com/stretchr/objx v0.1.0 // indirect
 	go.uber.org/mock v0.3.0 // indirect
-	golang.org/x/mod v0.22.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/mod v0.24.0 // indirect
+	golang.org/x/sync v0.13.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.29.0 // indirect
+	golang.org/x/tools v0.32.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
