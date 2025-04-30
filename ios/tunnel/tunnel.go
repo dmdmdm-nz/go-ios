@@ -34,6 +34,7 @@ type Tunnel struct {
 	UserspaceTUN     bool   `json:"userspaceTun"` // Userspace TUN device is used, connect to the local tcp port at Default
 	UserspaceTUNPort int    `json:"userspaceTunPort"`
 	closer           func() error
+	tunnelExited     *bool
 }
 
 // Close closes the connection to the device and removes the virtual network interface from the host
@@ -139,11 +140,15 @@ func connectToTunnel(ctx context.Context, info tunnelListener, addr string, devi
 	// doing it like this allows us to have a context with a timeout for the tunnel creation, but the tunnel itself
 	tunnelCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
+	var tunnelExited bool = false
+
 	go func() {
 		err := forwardDataToInterface(tunnelCtx, conn, utunIface)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to tunnel interface")
 		}
+
+		tunnelExited = true
 	}()
 
 	go func() {
@@ -151,6 +156,8 @@ func connectToTunnel(ctx context.Context, info tunnelListener, addr string, devi
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to the device")
 		}
+
+		tunnelExited = true
 	}()
 
 	closeFunc := func() error {
@@ -161,10 +168,11 @@ func connectToTunnel(ctx context.Context, info tunnelListener, addr string, devi
 	}
 
 	return Tunnel{
-		Address: tunnelInfo.ServerAddress,
-		RsdPort: int(tunnelInfo.ServerRSDPort),
-		Udid:    device.Properties.SerialNumber,
-		closer:  closeFunc,
+		Address:      tunnelInfo.ServerAddress,
+		RsdPort:      int(tunnelInfo.ServerRSDPort),
+		Udid:         device.Properties.SerialNumber,
+		closer:       closeFunc,
+		tunnelExited: &tunnelExited,
 	}, nil
 }
 
