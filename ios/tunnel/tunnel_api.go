@@ -397,34 +397,64 @@ func (m *TunnelManager) createUsbNcmTunnels(ctx context.Context, localTunnels ma
 		log.WithError(err).Error("failed to find remoted services")
 		return
 	}
+	log.Debugf("found %d possible interface(s)", len(addrs))
 
-	var wg sync.WaitGroup
+	resume_remoted, err := m.rs.suspendRemoted()
+	if err != nil {
+		log.WithError(err).
+			Error("failed to suspend remoted")
+	}
+
+	deviceAddrList := []struct {
+		Device  ios.DeviceEntry
+		Address string
+	}{}
+
 	for _, addr := range addrs {
+		log.Debugf("Checking interface: %s for a device", addr)
+		udid, err := ios.TryGetRsdUdid(ctx, addr)
+		if err != nil {
+			log.WithError(err).
+				WithField("addr", addr).
+				Error("failed to get UDID from address")
+			continue
+		}
+
+		log.Debugf("Found device: %s at address %s", udid, addr)
+
+		// Check if the UDID exists in the list of USBNCM devices.
+		var device ios.DeviceEntry
+		found := false
+		for _, d := range devices {
+			if d.Properties.SerialNumber == udid {
+				found = true
+				device = d
+				break
+			}
+		}
+		if !found {
+			log.Debugf("skipping tunnel to: %s as the device is not a USBNCM device.", udid)
+			continue
+		}
+
+		deviceAddrList = append(deviceAddrList, struct {
+			Device  ios.DeviceEntry
+			Address string
+		}{
+			Device:  device,
+			Address: addr,
+		})
+	}
+
+	resume_remoted()
+
+	// Create go-routines to establish each tunnel
+	var wg sync.WaitGroup
+	for _, deviceAddress := range deviceAddrList {
+
 		wg.Add(1)
-		go func(addr string) {
+		go func(device ios.DeviceEntry, addr string) {
 			defer wg.Done()
-
-			udid, err := ios.TryGetRsdUdid(ctx, addr)
-			if err != nil {
-				log.WithError(err).
-					WithField("addr", addr).
-					Error("failed to get UDID from address")
-				return
-			}
-
-			// Check if the UDID exists in the devices list.
-			var device ios.DeviceEntry
-			found := false
-			for _, d := range devices {
-				if d.Properties.SerialNumber == udid {
-					found = true
-					device = d
-					break
-				}
-			}
-			if !found {
-				return
-			}
 
 			// Start the tunnel.
 			t, err := m.startUsbNcmTunnel(ctx, device, addr)
@@ -440,7 +470,7 @@ func (m *TunnelManager) createUsbNcmTunnels(ctx context.Context, localTunnels ma
 			localTunnels[device.Properties.SerialNumber] = t
 			m.tunnels[device.Properties.SerialNumber] = t
 			m.mux.Unlock()
-		}(addr)
+		}(deviceAddress.Device, deviceAddress.Address)
 	}
 	wg.Wait()
 }
@@ -560,12 +590,6 @@ func (m manualPairingTunnelStart) StartUsbmuxTunnel(ctx context.Context, device 
 }
 
 func (m manualPairingTunnelStart) StartUsbNcmTunnel(ctx context.Context, device ios.DeviceEntry, p PairRecordManager, addr string, rs remotedService) (Tunnel, error) {
-	resume_remoted, err := rs.suspendRemoted()
-	if err != nil {
-		return Tunnel{}, fmt.Errorf("manualPairingTunnelStart: failed to suspend remoted: %w", err)
-	}
-
-	defer resume_remoted()
 	return ManualPairAndConnectToTunnel(ctx, device, p, addr)
 }
 
