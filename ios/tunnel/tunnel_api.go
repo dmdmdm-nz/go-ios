@@ -485,7 +485,7 @@ func (m *TunnelManager) removeDisconnectedTunnels(ctx context.Context, localTunn
 			}
 		}
 
-		if !exists {
+		if !exists || (tunnel.tunnelExited != nil && *tunnel.tunnelExited) {
 			// Attempt to stop the tunnel.
 			_ = m.stopTunnel(tunnel)
 

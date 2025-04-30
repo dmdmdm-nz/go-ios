@@ -39,20 +39,24 @@ func connectToTunnelLockdown(ctx context.Context, device ios.DeviceEntry, connTo
 	// doing it like this allows us to have a context with a timeout for the tunnel creation, but the tunnel itself
 	tunnelCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
+	var tunnelExited bool = false
+
 	go func() {
 		err := forwardTCPToInterface(tunnelCtx, tunnelInfo.ClientParameters.Mtu, connToDevice, utunIface)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to tunnel interface")
-			cancel()
 		}
+
+		tunnelExited = true
 	}()
 
 	go func() {
 		err := forwardTUNToDevice(tunnelCtx, tunnelInfo.ClientParameters.Mtu, utunIface, connToDevice)
 		if err != nil {
 			logrus.WithError(err).Error("failed to forward data to the device")
-			cancel()
 		}
+
+		tunnelExited = true
 	}()
 
 	closeFunc := func() error {
@@ -60,10 +64,11 @@ func connectToTunnelLockdown(ctx context.Context, device ios.DeviceEntry, connTo
 		return errors.Join(utunIface.Close(), connToDevice.Close())
 	}
 	return Tunnel{
-		Address: tunnelInfo.ServerAddress,
-		RsdPort: int(tunnelInfo.ServerRSDPort),
-		Udid:    device.Properties.SerialNumber,
-		closer:  closeFunc,
+		Address:      tunnelInfo.ServerAddress,
+		RsdPort:      int(tunnelInfo.ServerRSDPort),
+		Udid:         device.Properties.SerialNumber,
+		closer:       closeFunc,
+		tunnelExited: &tunnelExited,
 	}, nil
 }
 
@@ -125,6 +130,5 @@ func forwardTCPToInterface(ctx context.Context, mtu uint64, deviceConn io.Reader
 				return fmt.Errorf("could not flush packet: %w", err)
 			}
 		}
-
 	}
 }
