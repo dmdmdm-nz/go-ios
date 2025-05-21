@@ -200,7 +200,7 @@ func createTestIdentifierSet(productModuleName string, tests []string) XCTTestId
 		options := uint64(3)
 		components = append(components, clazz)
 		if len(method) > 0 {
-			options = 2
+			options = 6
 			components = append(components, method)
 		}
 
