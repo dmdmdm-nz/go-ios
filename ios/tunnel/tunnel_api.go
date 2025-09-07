@@ -219,6 +219,7 @@ type TunnelManager struct {
 	pm                   PairRecordManager
 	mux                  sync.Mutex
 	tunnels              map[string]Tunnel
+	unsupportedDevices   map[string]struct{}
 	startTunnelTimeout   time.Duration
 	firstUpdateCompleted bool
 	userspaceTUN         bool
@@ -235,6 +236,7 @@ func NewTunnelManager(pm PairRecordManager, userspaceTUN bool) *TunnelManager {
 		dl:                 deviceList{},
 		pm:                 pm,
 		tunnels:            map[string]Tunnel{},
+		unsupportedDevices: map[string]struct{}{},
 		startTunnelTimeout: 10 * time.Second,
 		userspaceTUN:       userspaceTUN,
 		portOffset:         1,
@@ -272,10 +274,17 @@ func (m *TunnelManager) FirstUpdateCompleted() bool {
 // On device disconnects the tunnel resources get cleaned up
 func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 	m.mux.Lock()
+
 	localTunnels := make(map[string]Tunnel, len(m.tunnels))
 	for key, tunnel := range m.tunnels {
 		localTunnels[key] = tunnel
 	}
+
+	localUnsupportedDevices := make(map[string]struct{}, len(m.unsupportedDevices))
+	for key, udid := range m.unsupportedDevices {
+		localUnsupportedDevices[key] = udid
+	}
+
 	m.mux.Unlock()
 
 	// Get the list of current devices.
@@ -299,6 +308,11 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 			continue
 		}
 
+		// If the device is in the unsupported list, skip it.
+		if _, unsupported := localUnsupportedDevices[udid]; unsupported {
+			continue
+		}
+
 		// Get the device version.
 		version, err := ios.GetProductVersion(d)
 		if err != nil {
@@ -310,6 +324,17 @@ func (m *TunnelManager) UpdateTunnels(ctx context.Context) error {
 		}
 
 		if version.LessThan(semver.MustParse("17.0.0")) {
+			// Check if this device is already in the unsupported list
+			m.mux.Lock()
+			if _, already := m.unsupportedDevices[udid]; already {
+				m.mux.Unlock()
+				continue
+			}
+
+			// Add to unsupported list
+			m.unsupportedDevices[udid] = struct{}{}
+			m.mux.Unlock()
+
 			log.
 				WithField("udid", udid).
 				Tracef("skipping: unsupported iOS version %s", version.String())
@@ -446,8 +471,6 @@ func (m *TunnelManager) createUsbNcmTunnels(ctx context.Context, localTunnels ma
 		})
 	}
 
-	resume_remoted()
-
 	// Create go-routines to establish each tunnel
 	var wg sync.WaitGroup
 	for _, deviceAddress := range deviceAddrList {
@@ -473,6 +496,8 @@ func (m *TunnelManager) createUsbNcmTunnels(ctx context.Context, localTunnels ma
 		}(deviceAddress.Device, deviceAddress.Address)
 	}
 	wg.Wait()
+
+	resume_remoted()
 }
 
 func (m *TunnelManager) removeDisconnectedTunnels(ctx context.Context, localTunnels map[string]Tunnel, devices ios.DeviceList) {
