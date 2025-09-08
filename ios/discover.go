@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/dmdmdm-nz/zeroconf"
@@ -23,6 +24,12 @@ func FindRemotedServiceAddresses(ctx context.Context) ([]string, error) {
 			if err != nil {
 				log.WithField("index", entry.ReceivedIfIndex).
 					Error("Failed to get interface by index:", err.Error())
+				continue
+			}
+
+			if !strings.HasPrefix(iface.Name, "en") {
+				log.WithField("name", iface.Name).
+					Trace("Skipping interface as it doesn't start with 'en'")
 				continue
 			}
 
