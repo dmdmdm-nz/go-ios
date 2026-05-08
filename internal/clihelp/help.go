@@ -216,12 +216,13 @@ func (c *Catalog) renderGlobal(version string) string {
 	b.WriteString("\nGlobal options:\n")
 	writeAlignedOptions(&b, c.GlobalOptions)
 	b.WriteString("\nCommands:\n")
+	maxWidth := c.maxCommandPathWidth()
 	for _, command := range c.sortedCommandsForDisplay() {
 		summary := command.Summary
 		if summary == "" {
 			summary = "See command help."
 		}
-		writeAlignedPair(&b, command.Path, summary, c.maxCommandPathWidth())
+		writeAlignedPair(&b, command.Path, summary, maxWidth)
 	}
 	b.WriteString("\nRun 'ios help <command>' or 'ios <command> --help' for command details.\n")
 	return b.String()
