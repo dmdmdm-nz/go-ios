@@ -122,6 +122,15 @@ func MatchAvailable(version string) string {
 }
 
 func Download17Plus(baseDir string, version *semver.Version) (string, error) {
+	restoreDir, err := downloadPersonalizedDDI(baseDir)
+	if err != nil {
+		log.Warnf("GitHub DDI download failed: %v, falling back to deviceboxhq.com", err)
+		return download17PlusDevicebox(baseDir, version)
+	}
+	return restoreDir, nil
+}
+
+func download17PlusDevicebox(baseDir string, version *semver.Version) (string, error) {
 	downloadUrl := fmt.Sprintf("%s%s%s", devicebox, xcode15_4_ddi, ".zip")
 	log.Infof("device iOS version: %s, getting developer image: %s", version.String(), downloadUrl)
 
