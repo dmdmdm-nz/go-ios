@@ -142,3 +142,45 @@ jobs:
           # No NODE_AUTH_TOKEN / .npmrc auth line: npm authenticates via OIDC
           # trusted publishing. Setting an (even empty) token would break OIDC.
           npm publish
+
+  # Install the freshly-published canary from the public registry on every OS
+  # and run the binary, asserting it reports the version we just published.
+  # This proves the end-to-end consumer experience (npm install -> postinstall
+  # places the binary -> binary runs) on Windows, Linux and macOS.
+  verify_install:
+    needs: build_on_linux_and_publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install published canary and run it
+        shell: bash
+        env:
+          EXPECTED_VERSION: 0.0.${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          # npm registry propagation is usually instant but can lag a few
+          # seconds right after publish; retry the pinned-version install.
+          for i in 1 2 3 4 5; do
+            if npm install -g "go-ios-canary@${EXPECTED_VERSION}"; then
+              break
+            fi
+            echo "install attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+
+          # The package has no "bin" field; postinstall.js drops the binary
+          # straight into npm's global bin dir, which is on PATH.
+          OUTPUT="$(ios version 2>&1)"
+          echo "ios version output: $OUTPUT"
+          echo "$OUTPUT" | grep -q "\"version\":\"${EXPECTED_VERSION}\"" \
+            || { echo "::error::expected version ${EXPECTED_VERSION} not found in 'ios version' output"; exit 1; }
+          echo "OK: go-ios-canary@${EXPECTED_VERSION} installed and runs on ${{ matrix.os }}"
