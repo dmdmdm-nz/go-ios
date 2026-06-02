@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/pkcs12"
+	"golang.org/x/term"
 
 	"github.com/danielpaulus/go-ios/ios/debugproxy"
 	"github.com/danielpaulus/go-ios/ios/deviceinfo"
@@ -2776,6 +2777,13 @@ func runOsTrace(device ios.DeviceEntry, pid int, processName string, messageFilt
 	log.Debug("Run OsTrace.")
 	// Note: streaming log messages places significant CPU load on the device.
 
+	formatEntry := func(e ostrace.LogEntry) string {
+		return convertToJSONString(e)
+	}
+	if JSONdisabled {
+		formatEntry = formatEntryPlain
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
@@ -2881,11 +2889,7 @@ func runOsTrace(device ios.DeviceEntry, pid int, processName string, messageFilt
 					done <- err
 					return
 				}
-				if JSONdisabled {
-					fmt.Printf("%s %s %d %s\n", entry.Timestamp.Format(time.RFC3339Nano), entry.LevelName, entry.PID, entry.Message)
-				} else {
-					fmt.Println(convertToJSONString(entry))
-				}
+				fmt.Println(formatEntry(entry))
 			}
 		}()
 
@@ -2920,6 +2924,51 @@ func runOsTrace(device ios.DeviceEntry, pid int, processName string, messageFilt
 			exitIfError("failed reading os_trace entry", err)
 		}
 	}
+}
+
+func colorForLevel(level ostrace.LogLevel) string {
+	switch level {
+	case ostrace.LogLevelInfo:
+		return "\033[36m" // cyan
+	case ostrace.LogLevelDebug:
+		return "\033[90m" // bright black (gray)
+	case ostrace.LogLevelError:
+		return "\033[31m" // red
+	case ostrace.LogLevelFault:
+		return "\033[1;31m" // bold red
+	default:
+		return "" // no color
+	}
+}
+
+func isTerminal(fd int) bool {
+	// golang.org/x/term is cross-platform (Linux/macOS/BSD/Windows), unlike a
+	// raw unix.TCGETS ioctl which only builds on Linux.
+	return term.IsTerminal(fd)
+}
+
+func formatEntryPlain(entry ostrace.LogEntry) string {
+	ts := entry.Timestamp.Format("2006-01-02T15:04:05.000Z07:00")
+	useColor := isTerminal(int(os.Stdout.Fd()))
+	dim, reset, color := "", "", ""
+	if useColor {
+		dim = "\033[90m"
+		reset = "\033[0m"
+		color = colorForLevel(entry.Level)
+	}
+	if entry.Label != nil {
+		return fmt.Sprintf("%s%s%s  %sPID:%-5d%s  %s<%-7s>%s  %s[%s:%s]%s  %s%s%s",
+			dim, ts, reset,
+			dim, entry.PID, reset,
+			color, entry.LevelName, reset,
+			dim, entry.Label.Subsystem, entry.Label.Category, reset,
+			color, entry.Message, reset)
+	}
+	return fmt.Sprintf("%s%s%s  %sPID:%-5d%s  %s<%-7s>%s  %s%s%s",
+		dim, ts, reset,
+		dim, entry.PID, reset,
+		color, entry.LevelName, reset,
+		color, entry.Message, reset)
 }
 
 func isProcessAlive(device ios.DeviceEntry, pid uint64) bool {
