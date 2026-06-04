@@ -1,6 +1,8 @@
 package accessibility
 
 import (
+	"context"
+
 	"github.com/danielpaulus/go-ios/ios"
 	dtx "github.com/danielpaulus/go-ios/ios/dtx_codec"
 )
@@ -14,28 +16,25 @@ func NewWithoutEventChangeListeners(device ios.DeviceEntry) (*ControlInterface, 
 	if err != nil {
 		return nil, err
 	}
-	control := NewControlInterface(conn.GlobalChannel(), "")
-	return control, nil
+	return &ControlInterface{
+		cm:      conn,
+		channel: conn.GlobalChannel(),
+	}, nil
 }
 
 // New creates and connects to the given device, a new ControlInterface instance
-func New(device ios.DeviceEntry) (*ControlInterface, error) {
+func New(ctx context.Context, device ios.DeviceEntry, notifier AccessibilityInspectorNotifier) (*ControlInterface, error) {
 	conn, err := dtx.NewUsbmuxdConnection(device, serviceName)
 	if err != nil {
 		return nil, err
 	}
-	control := NewControlInterface(conn.GlobalChannel(), "")
-	err = control.init()
-	return control, err
-}
 
-// NewWithWDA creates and connects to the given device, a new ControlInterface instance with WDA host configured
-func NewWithWDA(device ios.DeviceEntry, wdaHost string) (*ControlInterface, error) {
-	conn, err := dtx.NewUsbmuxdConnection(device, serviceName)
-	if err != nil {
-		return nil, err
+	control := &ControlInterface{
+		cm:       conn,
+		channel:  conn.GlobalChannel(),
+		notifier: notifier,
 	}
-	control := NewControlInterface(conn.GlobalChannel(), wdaHost)
-	err = control.init()
+
+	err = control.init(ctx)
 	return control, err
 }
