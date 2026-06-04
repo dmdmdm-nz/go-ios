@@ -4,6 +4,8 @@ package tunnel_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -37,12 +39,13 @@ func TestWebInspectorBrowserControl(t *testing.T) {
 		errCh := make(chan error, 1)
 		go func() { errCh <- server.Serve(serverCtx) }()
 		waitForCDPServer(t, server.Addr())
+		assertCDPListsFixturePage(t, server.Addr(), page.Key)
 
 		ws := connectCDPPage(t, server.Addr(), page.Key)
 		defer ws.Close()
 
 		cdpCommand(t, ws, 1, "Runtime.evaluate", map[string]any{
-			"expression":    `document.body.innerHTML = '<input id="agent" value="">'; document.getElementById("agent").focus();`,
+			"expression":    `document.body.innerHTML = '<input id="agent" value=""><button id="tap" style="position:absolute;left:0;top:0;width:120px;height:48px;color:rgb(1, 2, 3)">tap</button>'; window.clicked = 0; document.getElementById("tap").addEventListener("click", () => { window.clicked += 1; }); document.getElementById("agent").focus();`,
 			"returnByValue": true,
 		})
 		cdpCommand(t, ws, 2, "Input.dispatchKeyEvent", map[string]any{
@@ -58,32 +61,72 @@ func TestWebInspectorBrowserControl(t *testing.T) {
 			t.Fatalf("input value after CDP key event = %#v, want a", got)
 		}
 
-		nodeResponse := cdpCommand(t, ws, 4, "DOM.getNodeForLocation", map[string]any{"x": 1, "y": 1})
+		cdpCommand(t, ws, 4, "Input.emulateTouchFromMouseEvent", map[string]any{
+			"type":      "mousePressed",
+			"x":         10,
+			"y":         10,
+			"button":    "left",
+			"modifiers": 0,
+		})
+		clickedResponse := cdpCommand(t, ws, 5, "Runtime.evaluate", map[string]any{
+			"expression":    `window.clicked`,
+			"returnByValue": true,
+		})
+		if got := cdpEvaluateValue(clickedResponse); got != float64(1) {
+			t.Fatalf("window.clicked after CDP mouse event = %#v, want 1", got)
+		}
+
+		nodeResponse := cdpCommand(t, ws, 6, "DOM.getNodeForLocation", map[string]any{"x": 10, "y": 10})
 		nodeResult, _ := nodeResponse["result"].(map[string]any)
 		if nodeID, ok := numeric(nodeResult["nodeId"]); !ok || nodeID == 0 {
 			t.Fatalf("DOM.getNodeForLocation returned no nodeId: %#v", nodeResponse)
 		}
 
-		objectResponse := cdpCommand(t, ws, 5, "Runtime.evaluate", map[string]any{
+		bodyResponse := cdpCommand(t, ws, 7, "Runtime.evaluate", map[string]any{
+			"expression": `document.body`,
+		})
+		bodyID := cdpEvaluateObjectID(bodyResponse)
+		if bodyID == "" {
+			t.Fatalf("Runtime.evaluate document.body returned no objectId: %#v", bodyResponse)
+		}
+		bodyNodeResponse := cdpCommand(t, ws, 8, "DOM.requestNode", map[string]any{"objectId": bodyID})
+		bodyNodeResult, _ := bodyNodeResponse["result"].(map[string]any)
+		bodyNodeID, ok := numeric(bodyNodeResult["nodeId"])
+		if !ok || bodyNodeID == 0 {
+			t.Fatalf("DOM.requestNode returned no body nodeId: %#v", bodyNodeResponse)
+		}
+		styleResponse := cdpCommand(t, ws, 9, "DOM.getNodesForSubtreeByStyle", map[string]any{
+			"nodeId": bodyNodeID,
+			"computedStyles": []map[string]any{
+				{"name": "color", "value": "rgb(1, 2, 3)"},
+			},
+		})
+		styleResult, _ := styleResponse["result"].(map[string]any)
+		styleNodeIDs, _ := styleResult["nodeIds"].([]any)
+		if len(styleNodeIDs) == 0 {
+			t.Fatalf("DOM.getNodesForSubtreeByStyle returned no matching nodes: %#v", styleResponse)
+		}
+
+		objectResponse := cdpCommand(t, ws, 10, "Runtime.evaluate", map[string]any{
 			"expression": `document.getElementById("agent")`,
 		})
 		objectID := cdpEvaluateObjectID(objectResponse)
 		if objectID == "" {
 			t.Fatalf("Runtime.evaluate returned no objectId: %#v", objectResponse)
 		}
-		listenersResponse := cdpCommand(t, ws, 6, "DOMDebugger.getEventListeners", map[string]any{"objectId": objectID})
+		listenersResponse := cdpCommand(t, ws, 11, "DOMDebugger.getEventListeners", map[string]any{"objectId": objectID})
 		listenersResult, _ := listenersResponse["result"].(map[string]any)
 		if _, ok := listenersResult["listeners"].([]any); !ok {
 			t.Fatalf("DOMDebugger.getEventListeners returned no listeners array: %#v", listenersResponse)
 		}
 
-		resourceTree := cdpCommand(t, ws, 7, "Page.getResourceTree", map[string]any{})
+		resourceTree := cdpCommand(t, ws, 12, "Page.getResourceTree", map[string]any{})
 		resourceResult, _ := resourceTree["result"].(map[string]any)
 		if _, ok := resourceResult["frameTree"].(map[string]any); !ok {
 			t.Fatalf("Page.getResourceTree returned no frameTree: %#v", resourceTree)
 		}
 
-		cdpCommand(t, ws, 8, "Page.startScreencast", map[string]any{
+		cdpCommand(t, ws, 13, "Page.startScreencast", map[string]any{
 			"format":    "jpeg",
 			"quality":   80,
 			"maxWidth":  400,
@@ -93,10 +136,12 @@ func TestWebInspectorBrowserControl(t *testing.T) {
 		frameParams, _ := frame["params"].(map[string]any)
 		if data, _ := frameParams["data"].(string); data == "" {
 			t.Fatalf("Page.screencastFrame has empty data: %#v", frame)
+		} else if !validScreencastImage(data) {
+			t.Fatalf("Page.screencastFrame data is not a decodable PNG/JPEG payload")
 		}
 		sessionID, _ := numeric(frameParams["sessionId"])
-		cdpCommand(t, ws, 9, "Page.screencastFrameAck", map[string]any{"sessionId": sessionID})
-		cdpCommand(t, ws, 10, "Page.stopScreencast", map[string]any{})
+		cdpCommand(t, ws, 14, "Page.screencastFrameAck", map[string]any{"sessionId": sessionID})
+		cdpCommand(t, ws, 15, "Page.stopScreencast", map[string]any{})
 
 		_ = ws.Close()
 		stopServer()
@@ -208,6 +253,28 @@ func waitForCDPServer(t *testing.T, addr string) {
 	t.Fatalf("cdp server %s did not become ready", addr)
 }
 
+func assertCDPListsFixturePage(t *testing.T, addr string, pageKey string) {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/json/list")
+	if err != nil {
+		t.Fatalf("get CDP target list: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CDP target list status = %d", resp.StatusCode)
+	}
+	var targets []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		t.Fatalf("decode CDP target list: %v", err)
+	}
+	for _, target := range targets {
+		if target["id"] == pageKey && target["type"] == "page" && target["webSocketDebuggerUrl"] != "" {
+			return
+		}
+	}
+	t.Fatalf("CDP target list did not include page %s: %#v", pageKey, targets)
+}
+
 func connectCDPPage(t *testing.T, addr string, pageKey string) *websocket.Conn {
 	t.Helper()
 	ws, _, err := websocket.DefaultDialer.Dial("ws://"+addr+"/devtools/page/"+pageKey, nil)
@@ -267,6 +334,16 @@ func cdpEvaluateObjectID(response map[string]any) string {
 	remote, _ := result["result"].(map[string]any)
 	objectID, _ := remote["objectId"].(string)
 	return objectID
+}
+
+func validScreencastImage(data string) bool {
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil || len(decoded) < 8 {
+		return false
+	}
+	isJPEG := decoded[0] == 0xff && decoded[1] == 0xd8
+	isPNG := string(decoded[:8]) == "\x89PNG\r\n\x1a\n"
+	return isJPEG || isPNG
 }
 
 func numeric(value any) (int, bool) {
