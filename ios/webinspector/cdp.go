@@ -155,13 +155,17 @@ func (s *CDPServer) forwardDeviceEvents(ctx context.Context, ws *websocket.Conn)
 			return err
 		}
 		if dispatch, ok := unwrapDispatchMessage(event); ok {
-			if err := ws.WriteJSON(dispatch); err != nil {
-				return err
+			if normalized, drop := normalizeCDPEvent(dispatch); !drop {
+				if err := ws.WriteJSON(normalized); err != nil {
+					return err
+				}
 			}
 			continue
 		}
-		if err := ws.WriteJSON(event); err != nil {
-			return err
+		if normalized, drop := normalizeCDPEvent(event); !drop {
+			if err := ws.WriteJSON(normalized); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -173,15 +177,20 @@ func (s *CDPServer) forwardBrowserCommands(ctx context.Context, ws *websocket.Co
 			return err
 		}
 		id, _ := numericInt(message["id"])
-		method, _ := message["method"].(string)
 
-		if shouldReplyLocally(method) {
-			if err := ws.WriteJSON(map[string]any{"id": id, "result": map[string]any{}}); err != nil {
+		if handled, response, extra := localCDPResponse(message, targetID, sessionID); handled {
+			if err := ws.WriteJSON(response); err != nil {
 				return err
+			}
+			for _, event := range extra {
+				if err := ws.WriteJSON(event); err != nil {
+					return err
+				}
 			}
 			continue
 		}
 
+		message = translateCDPCommand(message)
 		wrapped := map[string]any{
 			"method": "Target.sendMessageToTarget",
 			"params": map[string]any{
@@ -243,6 +252,232 @@ func shouldReplyLocally(method string) bool {
 		"Network.enable",
 		"Page.enable",
 		"Runtime.enable":
+		return true
+	default:
+		return false
+	}
+}
+
+func localCDPResponse(message map[string]any, targetID string, sessionID string) (bool, map[string]any, []map[string]any) {
+	id, _ := numericInt(message["id"])
+	method, _ := message["method"].(string)
+	result := map[string]any{}
+	var extra []map[string]any
+	switch method {
+	case "Target.setAutoAttach":
+		extra = append(extra, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": sessionID,
+				"targetInfo": map[string]any{
+					"targetId": targetID,
+				},
+				"waitingForDebugger": true,
+			},
+		})
+	case "Target.setDiscoverTargets",
+		"Target.setRemoteLocations",
+		"DOM.enable",
+		"DOMDebugger.setBreakOnCSPViolation",
+		"Emulation.setTouchEmulationEnabled",
+		"Emulation.setFocusEmulationEnabled",
+		"Emulation.setEmulatedVisionDeficiency",
+		"Emulation.setEmitTouchEventsForMouse",
+		"Emulation.setAutoDarkModeOverride",
+		"HeapProfiler.enable",
+		"Input.dispatchKeyEvent",
+		"Input.emulateTouchFromMouseEvent",
+		"Log.startViolationsReport",
+		"Network.clearAcceptedEncodingsOverride",
+		"Network.setAttachDebugStack",
+		"Overlay.enable",
+		"Overlay.hideHighlight",
+		"Overlay.setPausedInDebuggerMessage",
+		"Overlay.setShowContainerQueryOverlays",
+		"Overlay.setShowFlexOverlays",
+		"Overlay.setShowGridOverlays",
+		"Overlay.setShowIsolatedElements",
+		"Overlay.setShowScrollSnapOverlays",
+		"Overlay.setShowViewportSizeOnResize",
+		"Page.screencastFrameAck",
+		"Page.startScreencast",
+		"Page.stopScreencast",
+		"Profiler.enable",
+		"Runtime.runIfWaitingForDebugger":
+	case "CSS.takeComputedStyleUpdates":
+		result["nodeIds"] = []int{}
+	case "Network.loadNetworkResource":
+		result["resource"] = map[string]any{"success": true}
+	case "Runtime.getIsolateId":
+		result["id"] = 0
+	case "Page.getNavigationHistory":
+		result["currentIndex"] = 0
+		result["entries"] = []map[string]any{{"id": 0, "url": "", "title": ""}}
+	default:
+		return false, nil, nil
+	}
+	return true, map[string]any{"id": id, "result": result}, extra
+}
+
+func translateCDPCommand(message map[string]any) map[string]any {
+	method, _ := message["method"].(string)
+	params, _ := message["params"].(map[string]any)
+	switch method {
+	case "Audits.enable":
+		message["method"] = "Audit.setup"
+	case "DOM.getBoxModel", "Overlay.highlightNode":
+		message["method"] = "DOM.highlightNode"
+		if params != nil && method == "DOM.getBoxModel" {
+			params["highlightConfig"] = map[string]any{
+				"showInfo":     true,
+				"contentColor": map[string]any{"r": 111, "g": 168, "b": 220, "a": 0.66},
+				"paddingColor": map[string]any{"r": 147, "g": 196, "b": 125, "a": 0.55},
+				"borderColor":  map[string]any{"r": 255, "g": 229, "b": 153, "a": 0.66},
+				"marginColor":  map[string]any{"r": 246, "g": 178, "b": 107, "a": 0.66},
+			}
+		}
+	case "Log.clear":
+		message["method"] = "Console.clearMessages"
+	case "Log.disable":
+		message["method"] = "Console.disable"
+	case "Log.enable":
+		message["method"] = "Console.enable"
+	case "Emulation.setEmulatedMedia":
+		message["method"] = "Page.setEmulatedMedia"
+	case "Emulation.setAutoDarkModeOverride":
+		message["method"] = "Page.setForcedAppearance"
+		if params != nil {
+			enabled, _ := params["enabled"].(bool)
+			message["params"] = map[string]any{"appearance": map[bool]string{true: "Dark", false: "Light"}[enabled]}
+		}
+	case "Network.setCacheDisabled":
+		message["method"] = "Network.setResourceCachingDisabled"
+		if params != nil {
+			message["params"] = map[string]any{"disabled": params["cacheDisabled"]}
+		}
+	case "ServiceWorker.enable":
+		message["method"] = "Worker.enable"
+	case "CSS.addRule":
+		if params != nil {
+			if rule, _ := params["ruleText"].(string); rule != "" {
+				params["selector"] = strings.Split(rule, "{")[0]
+			}
+		}
+	}
+	return message
+}
+
+func normalizeCDPEvent(message map[string]any) (map[string]any, bool) {
+	method, _ := message["method"].(string)
+	params, _ := message["params"].(map[string]any)
+	switch method {
+	case "Target.targetCreated":
+		message["method"] = "Target.targetInfoChanged"
+		if targetInfo, ok := params["targetInfo"].(map[string]any); ok {
+			if provisional, ok := targetInfo["isProvisional"]; ok {
+				targetInfo["attached"] = provisional
+				delete(targetInfo, "isProvisional")
+			}
+		}
+	case "Target.didCommitProvisionalTarget", "Page.defaultAppearanceDidChange":
+		return message, true
+	case "Debugger.globalObjectCleared":
+		return map[string]any{"method": "DOM.documentUpdated"}, false
+	case "Runtime.executionContextCreated":
+		if contextMap, ok := params["context"].(map[string]any); ok {
+			params["context"] = map[string]any{
+				"id":       contextMap["id"],
+				"origin":   "default",
+				"name":     "",
+				"uniqueId": contextMap["frameId"],
+			}
+		}
+	case "Console.messageAdded":
+		entry := map[string]any{"source": "javascript", "level": "info", "timestamp": float64(time.Now().UnixMilli()) / 1000}
+		if consoleMessage, ok := params["message"].(map[string]any); ok {
+			entry["source"] = logSource(stringValue(consoleMessage["source"]))
+			entry["level"] = logLevel(stringValue(consoleMessage["level"]))
+			entry["text"] = consoleMessage["text"]
+			if url := stringValue(consoleMessage["url"]); url != "" {
+				entry["url"] = url
+			}
+			if line, ok := numericInt(consoleMessage["line"]); ok {
+				entry["lineNumber"] = line
+			}
+			if requestID := stringValue(consoleMessage["networkRequestId"]); requestID != "" {
+				entry["networkRequestId"] = requestID
+			}
+		}
+		return map[string]any{"method": "Log.entryAdded", "params": map[string]any{"entry": entry}}, false
+	case "Network.responseReceived":
+		if response, ok := params["response"].(map[string]any); ok {
+			resourceType := stringValue(params["type"])
+			if !validNetworkResourceType(resourceType) {
+				resourceType = "Other"
+			}
+			normalized := map[string]any{
+				"loaderId":  params["loaderId"],
+				"requestId": params["requestId"],
+				"timestamp": params["timestamp"],
+				"type":      resourceType,
+				"response": map[string]any{
+					"url":               response["url"],
+					"status":            response["status"],
+					"statusText":        response["statusText"],
+					"headers":           response["headers"],
+					"mimeType":          response["mimeType"],
+					"connectionReused":  false,
+					"encodedDataLength": 0,
+					"securityState":     "unknown",
+				},
+			}
+			if frameID := params["frameId"]; frameID != nil {
+				normalized["frameId"] = frameID
+			}
+			message["params"] = normalized
+		}
+	case "Network.loadingFinished":
+		metrics, _ := params["metrics"].(map[string]any)
+		headerSize, _ := numericInt(metrics["responseHeaderBytesReceived"])
+		bodySize, _ := numericInt(metrics["responseBodyBytesReceived"])
+		message["params"] = map[string]any{
+			"encodedDataLength": headerSize + bodySize,
+			"requestId":         params["requestId"],
+			"timestamp":         params["timestamp"],
+		}
+	}
+	return message, false
+}
+
+func logSource(source string) string {
+	switch source {
+	case "xml", "javascript", "network", "storage", "appcache", "rendering", "security", "deprecation", "worker", "violation", "intervention", "recommendation", "other":
+		return source
+	case "console-api":
+		return "javascript"
+	default:
+		return "other"
+	}
+}
+
+func logLevel(level string) string {
+	switch level {
+	case "log", "info":
+		return "info"
+	case "warning":
+		return "warning"
+	case "error":
+		return "error"
+	case "debug":
+		return "verbose"
+	default:
+		return "info"
+	}
+}
+
+func validNetworkResourceType(resourceType string) bool {
+	switch resourceType {
+	case "Document", "Stylesheet", "Image", "Media", "Font", "Script", "TextTrack", "XHR", "Fetch", "EventSource", "WebSocket", "Manifest", "SignedExchange", "Ping", "CSPViolationReport", "Preflight", "Other":
 		return true
 	default:
 		return false
