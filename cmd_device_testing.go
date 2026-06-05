@@ -60,13 +60,15 @@ func runTestCommand(ctx commandContext) {
 			slog.Info("Failed running Xcuitest", "error", err)
 		}
 
-		slog.Info("test results", "results", testResults)
+		fmt.Println(convertToJSONString(testResults))
 	} else {
 		config.Listener = testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir())
-		_, err := testmanagerd.RunTestWithConfig(context.TODO(), config)
+		testResults, err := testmanagerd.RunTestWithConfig(context.TODO(), config)
 		if err != nil {
 			slog.Info("Failed running Xcuitest", "error", err)
 		}
+
+		fmt.Println(convertToJSONString(testResults))
 	}
 }
 
@@ -90,13 +92,15 @@ func runXCTestCommand(ctx commandContext) {
 			slog.Info("Failed running Xctest", "error", err)
 		}
 
-		slog.Info("test results", "results", testResults)
+		fmt.Println(convertToJSONString(testResults))
 	} else {
 		listener := testmanagerd.NewTestListener(io.Discard, io.Discard, os.TempDir())
-		_, err := testmanagerd.StartXCTestWithConfig(context.TODO(), xctestrunFilePath, ctx.Device, listener)
+		testResults, err := testmanagerd.StartXCTestWithConfig(context.TODO(), xctestrunFilePath, ctx.Device, listener)
 		if err != nil {
 			slog.Info("Failed running Xctest", "error", err)
 		}
+
+		fmt.Println(convertToJSONString(testResults))
 	}
 }
 
