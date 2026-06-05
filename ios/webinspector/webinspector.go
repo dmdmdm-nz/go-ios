@@ -40,6 +40,11 @@ const (
 	AutomationNotAvailable = "WIRAutomationAvailabilityNotAvailable"
 )
 
+var (
+	ErrWebInspectorDisabled     = errors.New("web inspector is not enabled on the device; enable Settings > Safari > Advanced > Web Inspector, then reconnect the device")
+	ErrRemoteAutomationDisabled = errors.New("remote automation is not enabled on the device; enable Settings > Safari > Advanced > Remote Automation, then retry")
+)
+
 type Application struct {
 	ID           string `json:"id"`
 	BundleID     string `json:"bundleId"`
@@ -305,7 +310,7 @@ func (c *Client) SendCommand(ctx context.Context, sessionID string, app Applicat
 
 func (c *Client) AutomationSession(ctx context.Context, app Application) (*AutomationSession, error) {
 	if c.State() == AutomationNotAvailable {
-		return nil, errors.New("remote automation is not enabled on the device")
+		return nil, ErrRemoteAutomationDisabled
 	}
 	sessionID := strings.ToUpper(uuid.New().String())
 	if err := c.RequestAutomationSession(sessionID, app); err != nil {
@@ -420,11 +425,14 @@ func (c *Client) waitForAutomationPage(ctx context.Context, sessionID string) (P
 		}
 		return false
 	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = fmt.Errorf("timed out waiting for remote automation page; %w", ErrRemoteAutomationDisabled)
+	}
 	return page, err
 }
 
 func (c *Client) waitForAutomationConnection(ctx context.Context, sessionID string) error {
-	return c.waitFor(ctx, func() bool {
+	err := c.waitFor(ctx, func() bool {
 		c.stateMu.Lock()
 		defer c.stateMu.Unlock()
 		for _, appPages := range c.pages {
@@ -436,6 +444,10 @@ func (c *Client) waitForAutomationConnection(ctx context.Context, sessionID stri
 		}
 		return false
 	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("timed out waiting for remote automation connection; %w", ErrRemoteAutomationDisabled)
+	}
+	return err
 }
 
 func (c *Client) readLoop() {
@@ -608,7 +620,7 @@ func (c *Client) watchDisabledNotification() {
 		err = conn.Observe(DisabledNotification, 10*time.Second)
 		if err == nil {
 			select {
-			case c.disabled <- errors.New("web inspector is not enabled on the device"):
+			case c.disabled <- ErrWebInspectorDisabled:
 			default:
 			}
 		}

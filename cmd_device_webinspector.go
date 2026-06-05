@@ -27,7 +27,7 @@ func runWebInspectorCommand(cmdCtx commandContext) {
 	client, err := webinspector.New(cmdCtx.Device)
 	exitIfError("failed connecting to webinspector", err)
 	defer client.Close()
-	exitIfError("failed starting webinspector", client.Connect(ctx))
+	exitIfError("failed starting webinspector", webInspectorStartupError(client.Connect(ctx)))
 
 	if list, _ := cmdCtx.Args.Bool("list"); list {
 		pages, err := client.ListPages(ctx, 500*time.Millisecond)
@@ -110,6 +110,13 @@ func runWebInspectorCommand(cmdCtx commandContext) {
 		}
 		return
 	}
+}
+
+func webInspectorStartupError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("timed out waiting for Web Inspector pages; enable Settings > Safari > Advanced > Web Inspector, then reconnect the device, or retry with --timeout=<seconds>: %w", err)
+	}
+	return err
 }
 
 func selectWebInspectorPage(ctx context.Context, client *webinspector.Client, pageID string, bundleID string) (webinspector.Application, webinspector.Page) {

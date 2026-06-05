@@ -1,8 +1,11 @@
 package webinspector
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseApplication(t *testing.T) {
@@ -93,5 +96,35 @@ func TestParseEvaluateResultObjectPreview(t *testing.T) {
 	text, _ := value.(string)
 	if !strings.Contains(text, "answer: 42") {
 		t.Fatalf("expected object preview, got %#v", value)
+	}
+}
+
+func TestAutomationSessionDisabledErrorIsActionable(t *testing.T) {
+	client := &Client{state: AutomationNotAvailable}
+	_, err := client.AutomationSession(context.Background(), Application{})
+	if !errors.Is(err, ErrRemoteAutomationDisabled) {
+		t.Fatalf("expected remote automation disabled error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Settings > Safari > Advanced > Remote Automation") {
+		t.Fatalf("error should include enablement instructions: %v", err)
+	}
+}
+
+func TestAutomationSessionTimeoutErrorIsActionable(t *testing.T) {
+	client := &Client{
+		apps:     make(map[string]Application),
+		pages:    make(map[string]map[string]Page),
+		errs:     make(chan error),
+		disabled: make(chan error),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+
+	_, err := client.waitForAutomationPage(ctx, "missing-session")
+	if !errors.Is(err, ErrRemoteAutomationDisabled) {
+		t.Fatalf("expected remote automation disabled error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Settings > Safari > Advanced > Remote Automation") {
+		t.Fatalf("error should include enablement instructions: %v", err)
 	}
 }
