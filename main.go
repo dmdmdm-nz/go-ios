@@ -153,6 +153,8 @@ Usage:
   ios sysmontap [options]
   ios timeformat (24h | 12h | toggle | get) [--force] [options]
   ios tunnel ls [options]
+  ios tunnel stop [options]
+  ios tunnel refresh [options]
   ios tunnel start [options] [--pair-record-path=<pairrecordpath>] [--userspace]
   ios tunnel stopagent
   ios ui install (wda | devicekit) --p12file=<p12file> --profile=<mobileprovision> [--p12password=<password>] [--path=<ipaOrZipOrApp>] [--output=<signedPath>] [--bundleid=<bundleid>] [options]
@@ -512,6 +514,10 @@ The commands work as following:
                                                                     Use --enabletun to activate using TUN devices rather than user space network.
                                                                     Requires sudo/admin shells.
 
+    ios tunnel stop --udid=<udid>                                   Stop the tunnel for one device without stopping the tunnel agent.
+
+    ios tunnel refresh --udid=<udid>                                Stop the tunnel for one device and wait until the agent recreates it.
+
     ios tunnel start [options] [--pair-record-path=<pairrecordpath>] [--enabletun]
                                                                     Creates a tunnel connection to the device.
                                                                     If the device was not paired with the host yet, device pairing will also be executed.
@@ -522,6 +528,8 @@ The commands work as following:
                                                                     writable directory instead (e.g. --pair-record-path=/Users/Shared/go-ios) and go-ios
                                                                     will manage its own tunnel identity. See https://github.com/danielpaulus/go-ios/issues/710
                                                                     If nothing is specified, the current dir is used for the pair record.
+                                                                    Pass --udid=<udid> to restrict the agent to a single device (isolated
+                                                                    per-device tunnel agent); run one per device on its own --tunnel-info-port.
                                                                     This command needs to be executed with admin privileges.
                                                                     (On MacOS the process 'remoted' must be paused before starting a tunnel,
                                                                     is possible 'sudo pkill -SIGSTOP remoted', and 'sudo pkill -SIGCONT remoted' to resume)
@@ -1806,7 +1814,7 @@ func pairDevice(device ios.DeviceEntry, orgIdentityP12File string, p12Password s
 	slog.Info(fmt.Sprintf("Successfully paired %s", device.Properties.SerialNumber))
 }
 
-func startTunnel(ctx context.Context, recordsPath string, tunnelInfoHost string, tunnelInfoPort int, userspaceTUN bool) {
+func startTunnel(ctx context.Context, recordsPath string, tunnelInfoHost string, tunnelInfoPort int, userspaceTUN bool, udid string) {
 	// Optional profiling endpoint: set GO_IOS_PPROF=host:port (e.g. 127.0.0.1:6060)
 	// to expose net/http/pprof (CPU, heap, block and mutex profiles) on the agent.
 	if addr := os.Getenv("GO_IOS_PPROF"); addr != "" {
@@ -1821,7 +1829,14 @@ func startTunnel(ctx context.Context, recordsPath string, tunnelInfoHost string,
 	}
 	pm, err := tunnel.NewPairRecordManager(recordsPath)
 	exitIfError("could not creat pair record manager", err)
-	tm := tunnel.NewTunnelManager(pm, userspaceTUN)
+	if udid != "" {
+		slog.Info("restricting tunnel agent to a single device", "udid", udid, "tunnelInfoPort", tunnelInfoPort)
+	}
+	// Always derive userspace listener ports from THIS agent's tunnel-info port
+	// (not the global default), so several agents on different ports — e.g. a
+	// general agent plus per-device agents — never collide. An empty udid means
+	// "manage all devices".
+	tm := tunnel.NewTunnelManagerForDevice(pm, userspaceTUN, udid, tunnelInfoPort)
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
